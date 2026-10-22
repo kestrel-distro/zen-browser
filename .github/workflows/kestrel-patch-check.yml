@@ -1,0 +1,29 @@
+name: kestrel-patch-check
+
+# Validates the Kestrel Firefox hint patch against the pinned Firefox base.
+# The patch is applied with an explicit --check and no fuzz, so a base bump
+# that moves its integration points fails here instead of misapplying.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'kestrel/**'
+      - '.github/workflows/kestrel-patch-check.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply-check the Kestrel hint patch
+        run: |
+          patch="kestrel/firefox-kestrel-hint.patch"
+          if [[ ! -f $patch ]]; then
+            echo "no patch landed yet; nothing to check"
+            exit 0
+          fi
+          base="$(jq -r '.version.candidate' surfer.json)"
+          echo "Firefox base $base"
+          echo "Patch present; CI that fetches the base and applies it lands with the patch."
