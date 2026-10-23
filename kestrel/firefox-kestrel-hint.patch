@@ -1,0 +1,110 @@
+diff --git i/dom/ipc/ContentChild.cpp w/dom/ipc/ContentChild.cpp
+index 16520e2d..01aa83c9 100644
+--- i/dom/ipc/ContentChild.cpp
++++ w/dom/ipc/ContentChild.cpp
+@@ -14,6 +14,7 @@
+ #include "HandlerServiceChild.h"
+ #include "ScrollingMetrics.h"
+ #include "imgLoader.h"
++#include "kestrel/KestrelHint.h"
+ #include "mozilla/AppShutdown.h"
+ #include "mozilla/Attributes.h"
+ #include "mozilla/BackgroundHangMonitor.h"
+@@ -2893,6 +2894,14 @@ mozilla::ipc::IPCResult ContentChild::RecvNotifyProcessPriorityChanged(
+ 
+   mProcessPriority = aPriority;
+ 
++#ifdef XP_LINUX
++  // Kestrel: hint 3 for a foreground content process, 4 for a background one,
++  // so scx_kestrel schedules the active tab ahead of the others. A no-op on a
++  // kernel without the Kestrel hint flag.
++  KestrelHint::SetProcess(
++      aPriority >= hal::PROCESS_PRIORITY_FOREGROUND ? 3u : 4u);
++#endif
++
+   os->NotifyObservers(static_cast<nsIPropertyBag2*>(props),
+                       "ipc:process-priority-changed", nullptr);
+   if (StaticPrefs::
+diff --git i/dom/ipc/kestrel/KestrelHint.h w/dom/ipc/kestrel/KestrelHint.h
+new file mode 100644
+index 00000000..d160ffa0
+--- /dev/null
++++ w/dom/ipc/kestrel/KestrelHint.h
+@@ -0,0 +1,77 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef KESTREL_KESTRELHINT_H_
++#define KESTREL_KESTRELHINT_H_
++
++/*
++ * Kestrel per-task scheduling hint.
++ *
++ * Sets the hint the Kestrel kernel stores on a task
++ * (sched_attr::sched_ext_hint, SCHED_FLAG_KESTREL_HINT) so scx_kestrel can
++ * classify the content process as foreground or background. A stock kernel
++ * rejects the flag, so every call fails harmlessly and the Kestrel broker's
++ * cgroup classification stands on its own.
++ *
++ * Keep the ABI in sync with kestrel-distro/kestrel
++ * install/helpers/libkestrel-hint/kestrel_hint.h and the kernel patch.
++ */
++
++#include <cstdint>
++#include <cstdlib>
++#include <dirent.h>
++#include <sys/syscall.h>
++#include <unistd.h>
++
++namespace KestrelHint {
++
++inline constexpr uint64_t kFlag = 1ULL << 40;  // SCHED_FLAG_KESTREL_HINT
++inline constexpr uint64_t kKeepPolicy = 0x08ULL;
++inline constexpr uint64_t kKeepParams = 0x10ULL;
++
++struct SchedAttrExt {
++  uint32_t size;
++  uint32_t sched_policy;
++  uint64_t sched_flags;
++  int32_t sched_nice;
++  uint32_t sched_priority;
++  uint64_t sched_runtime;
++  uint64_t sched_deadline;
++  uint64_t sched_period;
++  uint32_t sched_util_min;
++  uint32_t sched_util_max;
++  uint32_t sched_ext_hint;
++};
++
++inline int SetTid(pid_t aTid, uint32_t aHint) {
++  SchedAttrExt attr{};
++  attr.size = sizeof(attr);
++  attr.sched_flags = kFlag | kKeepPolicy | kKeepParams;
++  attr.sched_ext_hint = aHint;
++  return static_cast<int>(syscall(SYS_sched_setattr, aTid, &attr, 0u));
++}
++
++// Set the hint on every thread of this process.
++inline void SetProcess(uint32_t aHint) {
++  SetTid(getpid(), aHint);
++
++  DIR* dir = opendir("/proc/self/task");
++  if (!dir) {
++    return;
++  }
++  while (dirent* entry = readdir(dir)) {
++    if (entry->d_name[0] == '.') {
++      continue;
++    }
++    pid_t tid = static_cast<pid_t>(atoi(entry->d_name));
++    if (tid > 0) {
++      SetTid(tid, aHint);
++    }
++  }
++  closedir(dir);
++}
++
++}  // namespace KestrelHint
++
++#endif  // KESTREL_KESTRELHINT_H_
