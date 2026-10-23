@@ -9,17 +9,28 @@ against the `FIREFOX_158_0_1_RELEASE` tag.
 ## What the patch does
 
 `scx_kestrel` classifies tasks by a per-task hint the Kestrel kernel stores on
-them (`sched_attr::sched_ext_hint`, `SCHED_FLAG_KESTREL_HINT`). A content
-process has to hint itself: the parent cannot set another process's hint
-without `CAP_SYS_NICE`, and the session broker does not run inside the content
-process.
+them (`sched_attr::sched_ext_hint`, `SCHED_FLAG_KESTREL_HINT`). The content
+process hints itself: `ContentChild::RecvNotifyProcessPriorityChanged` already
+runs there with the foreground/background decision, so the patch sets hint 3 for
+foreground and 4 for background. It adds `dom/ipc/kestrel/KestrelHint.h`, a
+header-only helper that fails harmlessly on a stock kernel.
 
-The patch hooks `ContentChild::RecvNotifyProcessPriorityChanged`, which already
-runs in the content process with the foreground/background decision, and sets
-hint 3 for foreground and 4 for background. It adds
-`dom/ipc/kestrel/KestrelHint.h`, a header-only helper that fails harmlessly on a
-stock kernel, where the Kestrel broker's cgroup classification remains the only
-path.
+The patch covers threads that exist when the priority changes; Firefox re-sends
+the priority on tab focus/visibility changes, so render and worker threads
+created later are covered on the next transition.
+
+## What it deliberately does not do
+
+The chrome/parent process is left unhinted. It has one long-lived priority and
+would otherwise be pinned to browser-active forever; the broker's cgroup
+classification (`kestrel-browser.slice`) is the right lever for it. The broker
+also moves the browser process tree between the active and background buckets,
+which is the slice part of the design.
+
+A same-UID process can set another task's hint (`sched_setattr` keeps the
+target's params with `SCHED_FLAG_KEEP_PARAMS`), but hinting from the parent is
+still avoided: the hint space is class-valued, and only the process itself knows
+which class it is.
 
 An equivalent, Kestrel-owned copy of the patch is committed on the
 `kestrel/hint` branch of `kestrel-distro/firefox`.
