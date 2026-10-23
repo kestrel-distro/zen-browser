@@ -1,8 +1,8 @@
 name: kestrel-patch-check
 
-# Validates the Kestrel Firefox hint patch against the pinned Firefox base.
-# The patch is applied with an explicit --check and no fuzz, so a base bump
-# that moves its integration points fails here instead of misapplying.
+# Validates the Kestrel Firefox hint patch against the Firefox base Zen pins in
+# surfer.json. The patch is applied with an explicit --check and no fuzz, so a
+# base bump that moves its integration point fails here instead of misapplying.
 
 on:
   workflow_dispatch:
@@ -11,19 +11,29 @@ on:
       - 'kestrel/**'
       - '.github/workflows/kestrel-patch-check.yml'
 
+env:
+  FIREFOX_TAG: FIREFOX_158_0_1_RELEASE
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fetch the Firefox base
+        run: |
+          git clone --filter=blob:none --no-checkout --depth 1 \
+            --branch "$FIREFOX_TAG" \
+            https://github.com/mozilla-firefox/firefox.git /tmp/firefox
+          cd /tmp/firefox
+          git sparse-checkout init --cone
+          git sparse-checkout set dom/ipc
+          git checkout
+
       - name: Apply-check the Kestrel hint patch
         run: |
-          patch="kestrel/firefox-kestrel-hint.patch"
-          if [[ ! -f $patch ]]; then
-            echo "no patch landed yet; nothing to check"
-            exit 0
-          fi
-          base="$(jq -r '.version.candidate' surfer.json)"
-          echo "Firefox base $base"
-          echo "Patch present; CI that fetches the base and applies it lands with the patch."
+          cd /tmp/firefox
+          git apply --check "$GITHUB_WORKSPACE/kestrel/firefox-kestrel-hint.patch"
+          git apply "$GITHUB_WORKSPACE/kestrel/firefox-kestrel-hint.patch"
+          test -f dom/ipc/kestrel/KestrelHint.h
+          echo "patch applies and the helper lands"
